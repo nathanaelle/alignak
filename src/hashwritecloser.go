@@ -8,6 +8,7 @@ import	(
 	"hash"
 	"strings"
 
+	sd "github.com/nathanaelle/sdialog"
 )
 
 type	HashedWriteCloser struct {
@@ -16,12 +17,13 @@ type	HashedWriteCloser struct {
 	pipe		io.WriteCloser
 }
 
+
 func NewHashedWriteCloser(file string, h hash.Hash) (*HashedWriteCloser) {
 	pipe, err	:= os.Create(file)
 	if err != nil {
 		panic(err)
 	}
-	sd_notify("STATUS",strings.Join([]string{ file, "opened" }," "))
+	sd.Status(strings.Join([]string{ file, "opened" }," "))
 
 	return &HashedWriteCloser {
 		h:	h,
@@ -30,11 +32,14 @@ func NewHashedWriteCloser(file string, h hash.Hash) (*HashedWriteCloser) {
 	}
 }
 
-func (hwc *HashedWriteCloser) Close()  {
-	hwc.pipe.Close()
+
+func (hwc *HashedWriteCloser) Close() error {
+	err := hwc.pipe.Close()
 	sum := hwc.h.Sum(nil)
-	sd_notify("STATUS",strings.Join([]string{ hwc.name, "closed hash [",  fmt.Sprintf("%x", sum) ,"]" }," "))
+	sd.Status(strings.Join([]string{ hwc.name, "closed hash [",  fmt.Sprintf("%x", sum) ,"]" }," "))
+	return	err
 }
+
 
 func (hwc *HashedWriteCloser) Write(b []byte) (s int, e error) {
 	s,e = hwc.pipe.Write(b)
