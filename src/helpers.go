@@ -1,44 +1,42 @@
-package	main
+package main
 
-import	(
+import (
+	"context"
+	"fmt"
 	"io"
 	"os"
-	"fmt"
-	"sync"
-	"time"
-	"syscall"
 	"os/exec"
 	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
-	sd "github.com/nathanaelle/sdialog"
+	sd "github.com/nathanaelle/sdialog/v2"
 )
 
-
-func valid_file(file string) error {
-	st,err	:= os.Stat(file)
+func validFile(file string) error {
+	st, err := os.Stat(file)
 	if err != nil {
-		return	err
+		return err
 	}
 
-	mode	:= st.Mode()
+	mode := st.Mode()
 	if !mode.IsRegular() || (mode.Perm()&0111) == 0 {
-		return	fmt.Errorf("%s : no exec permission", file)
+		return fmt.Errorf("%s : no exec permission", file)
 	}
-	return	nil
+	return nil
 }
 
-
-
-func exec_cmd(cmd *exec.Cmd, end,reload <-chan struct{}, oups chan<- struct{}, wg *sync.WaitGroup) {
-	defer	cmd.Stdout.(io.WriteCloser).Close()
-	defer	cmd.Stderr.(io.WriteCloser).Close()
+func execCmd(ctx context.Context, cmd *exec.Cmd, reload <-chan struct{}, oups chan<- struct{}, wg *sync.WaitGroup) {
+	defer cmd.Stdout.(io.WriteCloser).Close()
+	defer cmd.Stderr.(io.WriteCloser).Close()
 
 	wg.Add(1)
 	defer wg.Done()
 
 	if err := cmd.Start(); err != nil {
-		sd.SD_ERR.Error(err)
-		oups<-struct{}{}
+		sd.LogERR.LogError(err)
+		oups <- struct{}{}
 		return
 	}
 
@@ -52,31 +50,29 @@ func exec_cmd(cmd *exec.Cmd, end,reload <-chan struct{}, oups chan<- struct{}, w
 
 	exiting := false
 	select {
-	case	<-reload:
-		stop_cmd(cmd)
+	case <-reload:
+		stopCmd(cmd)
 		sd.Notify(sd.Reloading())
 
-	case	<-end:
+	case <-ctx.Done():
 		exiting = true
-		stop_cmd(cmd)
+		stopCmd(cmd)
 		sd.Notify(sd.Stopping())
 
-	case	<-exited:
+	case <-exited:
 		if !exiting {
 			if !cmd.ProcessState.Exited() {
-				sd.SD_ALERT.Log("WTF ! exit signal from an non terminated process")
+				sd.LogALERT.Log("exit signal from an non terminated process")
 			}
 			sd.Notify(sd.Stopping())
-			oups<-struct{}{}
+			oups <- struct{}{}
 		}
 	}
 }
 
-
-
-func	wait_kill(cmd *exec.Cmd, sig syscall.Signal) <-chan struct{} {
-	c	:= make(chan struct{})
-	go func(){
+func waitKill(cmd *exec.Cmd, sig syscall.Signal) <-chan struct{} {
+	c := make(chan struct{})
+	go func() {
 		cmd.Process.Signal(sig)
 		cmd.Process.Wait()
 		close(c)
@@ -84,62 +80,58 @@ func	wait_kill(cmd *exec.Cmd, sig syscall.Signal) <-chan struct{} {
 	return c
 }
 
-
-func	try_kill(cmd *exec.Cmd, sig syscall.Signal) bool {
-	sd.Logf(sd.SD_DEBUG, "%s : send %s", cmd.Path, sig.String() )
+func tryKill(cmd *exec.Cmd, sig syscall.Signal) bool {
+	sd.LogDEBUG.Logf("%s : send %s", cmd.Path, sig.String())
 
 	select {
-	case	<-wait_kill(cmd, sig):
-	case	<-time.After(500*time.Millisecond):
+	case <-waitKill(cmd, sig):
+	case <-time.After(500 * time.Millisecond):
 	}
 
 	return cmd.ProcessState.Exited()
 }
 
-
-
-func	stop_cmd(cmd *exec.Cmd) {
-	if(try_kill(cmd, syscall.SIGTERM)){
+func stopCmd(cmd *exec.Cmd) {
+	if tryKill(cmd, syscall.SIGTERM) {
 		return
 	}
 
-	if(try_kill(cmd, syscall.SIGINT)){
+	if tryKill(cmd, syscall.SIGINT) {
 		return
 	}
 
-	if(try_kill(cmd, syscall.SIGKILL)){
+	if tryKill(cmd, syscall.SIGKILL) {
 		return
 	}
 
-	try_kill(cmd, syscall.SIGABRT)
+	tryKill(cmd, syscall.SIGABRT)
 }
 
-
-func	SignalCatcher(wg *sync.WaitGroup) (<-chan struct{},<-chan struct{})  {
-	end	:= make(chan struct{})
-	reload	:= make(chan struct{})
+func signalCatcher(wg *sync.WaitGroup) (context.Context, <-chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reload := make(chan struct{})
 
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
 
-		signalChannel	:= make(chan os.Signal)
+		signalChannel := make(chan os.Signal)
 
 		signal.Notify(signalChannel, syscall.SIGABRT, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 		defer close(signalChannel)
 		defer close(reload)
-		defer close(end)
+		defer cancel()
 
 		for sig := range signalChannel {
-			switch	sig {
-			case	syscall.SIGHUP:
+			switch sig {
+			case syscall.SIGHUP:
 				reload <- struct{}{}
-			case	syscall.SIGABRT, syscall.SIGINT, syscall.SIGTERM:
+			case syscall.SIGABRT, syscall.SIGINT, syscall.SIGTERM:
 				return
 			}
 		}
 	}()
 
-	return end,reload
+	return ctx, reload
 }

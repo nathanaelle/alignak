@@ -1,48 +1,44 @@
-package	main
+package main
 
-
-import	(
-	"io"
-	"os"
+import (
 	"fmt"
 	"hash"
+	"io"
+	"os"
 	"strings"
 
-	sd "github.com/nathanaelle/sdialog"
+	sd "github.com/nathanaelle/sdialog/v2"
 )
 
-type	HashedWriteCloser struct {
-	name		string
-	h		hash.Hash
-	pipe		io.WriteCloser
+type hashedWriteCloser struct {
+	name string
+	h    hash.Hash
+	pipe io.WriteCloser
 }
 
-
-func NewHashedWriteCloser(file string, h hash.Hash) (*HashedWriteCloser) {
-	pipe, err	:= os.Create(file)
+func newHashedWriteCloser(file string, h hash.Hash) io.WriteCloser {
+	pipe, err := os.Create(file)
 	if err != nil {
 		panic(err)
 	}
-	sd.Status(strings.Join([]string{ file, "opened" }," "))
+	sd.Status(strings.Join([]string{file, "opened"}, " "))
 
-	return &HashedWriteCloser {
-		h:	h,
-		name:	file,
-		pipe:	pipe,
+	return &hashedWriteCloser{
+		h:    h,
+		name: file,
+		pipe: pipe,
 	}
 }
 
-
-func (hwc *HashedWriteCloser) Close() error {
+func (hwc *hashedWriteCloser) Close() error {
 	err := hwc.pipe.Close()
 	sum := hwc.h.Sum(nil)
-	sd.Status(strings.Join([]string{ hwc.name, "closed hash [",  fmt.Sprintf("%x", sum) ,"]" }," "))
-	return	err
+	sd.Status(strings.Join([]string{hwc.name, "closed hash [", fmt.Sprintf("%x", sum), "]"}, " "))
+	return err
 }
 
-
-func (hwc *HashedWriteCloser) Write(b []byte) (s int, e error) {
-	s,e = hwc.pipe.Write(b)
+func (hwc *hashedWriteCloser) Write(b []byte) (s int, e error) {
+	s, e = hwc.pipe.Write(b)
 	hwc.h.Write(b[0:s])
-	return s,e
+	return s, e
 }
